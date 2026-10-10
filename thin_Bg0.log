@@ -1,0 +1,42 @@
+step      0 t=    0.00 W_K=2.45830e+06 W_B0=3.53895e+06 W_E=0.000e+00 W_Bpert=8.387e+03 dW/W=+0.00e+00
+step    400 t=   20.00 W_K=2.48447e+06 W_B0=3.49916e+06 W_E=1.049e+04 W_Bpert=1.151e+04 dW/W=-9.51e-07
+step    800 t=   40.00 W_K=2.49564e+06 W_B0=3.48740e+06 W_E=9.319e+03 W_Bpert=1.334e+04 dW/W=+1.02e-05
+step   1200 t=   60.00 W_K=2.49618e+06 W_B0=3.48817e+06 W_E=9.271e+03 W_Bpert=1.218e+04 dW/W=+2.70e-05
+step   1600 t=   80.00 W_K=2.50175e+06 W_B0=3.48143e+06 W_E=1.023e+04 W_Bpert=1.237e+04 dW/W=+2.49e-05
+step   2000 t=  100.00 W_K=2.51235e+06 W_B0=3.47084e+06 W_E=9.188e+03 W_Bpert=1.346e+04 dW/W=+3.42e-05
+step   2400 t=  120.00 W_K=2.50639e+06 W_B0=3.47741e+06 W_E=1.014e+04 W_Bpert=1.202e+04 dW/W=+5.61e-05
+step   2800 t=  140.00 W_K=2.50205e+06 W_B0=3.48185e+06 W_E=1.025e+04 W_Bpert=1.176e+04 dW/W=+4.67e-05
+step   3200 t=  160.00 W_K=2.50667e+06 W_B0=3.47773e+06 W_E=9.042e+03 W_Bpert=1.242e+04 dW/W=+3.86e-05
+step   3600 t=  180.00 W_K=2.51700e+06 W_B0=3.46424e+06 W_E=1.007e+04 W_Bpert=1.462e+04 dW/W=+4.89e-05
+step   4000 t=  200.00 W_K=2.50125e+06 W_B0=3.48226e+06 W_E=9.103e+03 W_Bpert=1.335e+04 dW/W=+5.56e-05
+step   4400 t=  220.00 W_K=2.50074e+06 W_B0=3.48300e+06 W_E=9.886e+03 W_Bpert=1.235e+04 dW/W=+5.61e-05
+step   4800 t=  240.00 W_K=2.50497e+06 W_B0=3.47828e+06 W_E=1.019e+04 W_Bpert=1.258e+04 dW/W=+6.57e-05
+step   5200 t=  260.00 W_K=2.50905e+06 W_B0=3.47337e+06 W_E=9.439e+03 W_Bpert=1.421e+04 dW/W=+7.44e-05
+step   5600 t=  280.00 W_K=2.50437e+06 W_B0=3.47941e+06 W_E=8.961e+03 W_Bpert=1.341e+04 dW/W=+8.60e-05
+step   6000 t=  300.00 W_K=2.50846e+06 W_B0=3.47389e+06 W_E=9.637e+03 W_Bpert=1.416e+04 dW/W=+8.60e-05
+step   6400 t=  320.00 W_K=2.52185e+06 W_B0=3.46142e+06 W_E=9.009e+03 W_Bpert=1.395e+04 dW/W=+9.86e-05
+step   6800 t=  340.00 W_K=2.51590e+06 W_B0=3.46687e+06 W_E=8.656e+03 W_Bpert=1.485e+04 dW/W=+1.07e-04
+step   7200 t=  360.00 W_K=2.51335e+06 W_B0=3.46969e+06 W_E=9.658e+03 W_Bpert=1.364e+04 dW/W=+1.16e-04
+step   7600 t=  380.00 W_K=2.51865e+06 W_B0=3.46509e+06 W_E=9.017e+03 W_Bpert=1.356e+04 dW/W=+1.14e-04
+step   8000 t=  400.00 W_K=2.52600e+06 W_B0=3.45600e+06 W_E=9.513e+03 W_Bpert=1.488e+04 dW/W=+1.27e-04
+step   8400 t=  420.00 W_K=2.51200e+06 W_B0=3.47138e+06 W_E=9.226e+03 W_Bpert=1.381e+04 dW/W=+1.31e-04
+step   8800 t=  440.00 W_K=2.52512e+06 W_B0=3.45725e+06 W_E=9.334e+03 W_Bpert=1.469e+04 dW/W=+1.28e-04
+step   9200 t=  460.00 W_K=2.51799e+06 W_B0=3.46477e+06 W_E=8.901e+03 W_Bpert=1.472e+04 dW/W=+1.25e-04
+step   9600 t=  480.00 W_K=2.51221e+06 W_B0=3.47068e+06 W_E=9.392e+03 W_Bpert=1.409e+04 dW/W=+1.22e-04
+
+=== tearing run summary ===
+steps=10000 dt=0.0500 t_end=500.0  pushed/species=20064  Bg=0 modes=tearing lam=5 Lx=128 Lz=64 k*lam=0.49  seed Bx~0.160  symmetry error=1.6e-13
+total energy drift: final +1.370e-04  max 1.401e-04
+W_K  : 2.45830e+06 -> 2.52212e+06  (+1.063e-02 of W_total)
+W_B0 : 3.53895e+06 -> 3.45985e+06  (-1.317e-02 of W_total)
+W_E  : 0.00000e+00 -> 9.20097e+03  (+1.532e-03 of W_total)
+W_B  : 8.38726e+03 -> 1.52842e+04  (+1.148e-03 of W_total)
+T_ion: 4.1561 -> 4.1781
+T_ele: 4.1089 -> 4.2096
+mode      |Bx| at x=Lx/4: start -> end (x growth) | max over t
+  (0,-1)   1.395e-01 -> 2.015e-01 (x1.44) | max 2.106e-01
+            gamma(amp) over t=    25..   125: -1.634e-04   E+B 1.796e+04 -> 1.875e+04
+            gamma(amp) over t=   125..   250: +4.045e-04   E+B 1.876e+04 -> 2.053e+04
+            gamma(amp) over t=   250..   375: -1.414e-04   E+B 2.053e+04 -> 1.906e+04
+            gamma(amp) over t=   375..   485: +6.382e-05   E+B 1.906e+04 -> 2.031e+04
+saved tearing_tearing_Bg0_lam5_Lx128_Lz64.npz, tearing_tearing_Bg0_lam5_Lx128_Lz64.png, tearing_tearing_Bg0_lam5_Lx128_Lz64_modes.png
