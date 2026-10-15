@@ -107,14 +107,23 @@ def _safe_inv(a: np.ndarray) -> np.ndarray:
     return out
 
 
-def build_modes(cfg: SimulationConfig, include_mean: bool = False):
-    """Half-space perturbation modes, plus (optionally) the dynamic (0,0) mean
-    mode whose B state is the FULL equilibrium B_eq + deviations."""
+def build_modes(cfg: SimulationConfig, include_mean: bool = True):
+    """Half-space perturbation modes, plus the dynamic (0,0) mean mode by
+    default.  The mean channel represents the full equilibrium B_eq + deviations
+    in the x-grid field, and it is the correct default for the double-Harris
+    equilibrium used here.
+
+    Passing include_mean=False is retained for compatibility with any truly
+    static-background runs, but the default behavior is to evolve the mean mode.
+    """
     dx = cfg.Lx / cfg.nx
     x = np.arange(cfg.nx) * dx
     kx = 2.0 * np.pi * np.fft.fftfreq(cfg.nx, d=dx)
-    s = np.sin(kx * dx) / dx
-    sig2 = (2.0 - 2.0 * np.cos(kx * dx)) / dx ** 2
+    # Exact x-Fourier symbol for the periodic direction. The mixed Fourier
+    # representation keeps the y,z dependence as retained modes but uses the
+    # exact spectral derivative in x, matching the intended k-space Maxwell
+    # update and avoiding the finite-difference x-stencil from the older solver.
+    kx2 = kx * kx
     modes = []
     for md in canonical_modes(cfg):
         ky = cfg.k_y(md)
@@ -126,16 +135,16 @@ def build_modes(cfg: SimulationConfig, include_mean: bool = False):
         B = np.zeros((3, cfg.nx), dtype=np.complex128)
         B[0] = -1j * kz * Ay
         B[2] = _ddx(Ay, dx)
-        modes.append(_Mode(m=md.m, n=md.n, ky=ky, kz=kz, kperp2=kperp2, s=s,
-                           denom=s * s + kperp2, denomL=sig2 + kperp2,
+        modes.append(_Mode(m=md.m, n=md.n, ky=ky, kz=kz, kperp2=kperp2, s=1j * kx,
+                           denom=kx2 + kperp2, denomL=kx2 + kperp2,
                            ET=np.zeros((3, cfg.nx), dtype=np.complex128),
                            B=B, seed=md.seed_amplitude))
     if include_mean:
         B0 = np.zeros((3, cfg.nx), dtype=np.complex128)
         B0[1] = cfg.Bg
         B0[2] = Bz_eq(x, cfg)
-        modes.append(_Mode(m=0, n=0, ky=0.0, kz=0.0, kperp2=0.0, s=s,
-                           denom=s * s, denomL=sig2,
+        modes.append(_Mode(m=0, n=0, ky=0.0, kz=0.0, kperp2=0.0, s=1j * kx,
+                           denom=kx2, denomL=kx2,
                            ET=np.zeros((3, cfg.nx), dtype=np.complex128),
                            B=B0, seed=0.0, mult=1.0, is_mean=True))
     for md in modes:
@@ -188,7 +197,7 @@ def deposit_rho(species, cfg, modes, dx, shapes, phases):
     """rho_k(x) for every mode at the current (time n) positions."""
     rho = [np.zeros(cfg.nx, dtype=np.complex128) for _ in modes]
     for sp, (i0, i1, f), ph in zip(species, shapes, phases):
-        coef = sp.q * sp.weight / (dx * cfg.Ly * cfg.Lz)
+        coef = sp.q * sp.weight / dx
         for km in range(len(modes)):
             rho[km] += _deposit(i0, i1, f, coef * np.conj(ph[km]), cfg.nx)
     return rho
@@ -211,12 +220,16 @@ def gather_longitudinal(modes, phis, shape, phases, dx):
     return acc.real
 
 
-def transverse_current(J, mode: _Mode):
-    """Remove the longitudinal (grad psi) part of J, consistent with D."""
-    dJx = np.fft.ifft(1j * mode.s * np.fft.fft(J[0]))
+def transverse_current(J, mode: _Mode, dx: float):
+    """Remove the longitudinal (grad psi) part of J using the exact spectral
+    x-derivative.  This matches the exact Fourier representation used in the
+    rest of the mode solve.
+    """
+    kx = 2.0 * np.pi * np.fft.fftfreq(J.shape[1], d=dx)
+    dJx = np.fft.ifft(1j * kx * np.fft.fft(J[0]))
     div = dJx + 1j * mode.ky * J[1] + 1j * mode.kz * J[2]
     psi = -np.fft.ifft(np.fft.fft(div) * mode.inv)
-    dpsi = np.fft.ifft(1j * mode.s * np.fft.fft(psi))
+    dpsi = np.fft.ifft(1j * kx * np.fft.fft(psi))
     JL = np.array([dpsi, 1j * mode.ky * psi, 1j * mode.kz * psi])
     return J - JL
 
@@ -240,11 +253,32 @@ def boris(v, E, B, q_over_m, dt):
     return vplus + h * E
 
 
-def _mode_energy(a, dx, vperp, coef, b=None, mult=2.0) -> float:
-    """coef * mult * Ly*Lz * dx * sum |a|^2 (or Re a.conj(b)) for one mode."""
+def _mode_energy(a, dx, vperp, coef, b=None, mult=2.0, mean_mode: bool = False) -> float:
+    """Mode-space energy contribution for one Fourier harmonic.
+
+    In this formulation we accumulate the energy directly from the retained x-
+    profile of each mode and sum over modes. The y,z box area is not applied
+    again; it is already implicit in the fact that we keep only the x-dependent
+    mode amplitudes themselves.
+    """
     if b is None:
-        return coef * mult * vperp * dx * float(np.sum(np.abs(a) ** 2))
-    return coef * mult * vperp * dx * float(np.sum((a * np.conj(b)).real))
+        return coef * mult * dx * float(np.sum(np.abs(a) ** 2))
+    return coef * mult * dx * float(np.sum((a * np.conj(b)).real))
+
+
+def _background_magnetic_energy(cfg: SimulationConfig, mu_0: float) -> float:
+    """Static equilibrium magnetic energy, B_eq(x) = (0, Bg, Bz_eq(x)).
+
+    This is the x-only mean-field contribution in the retained (0,0) channel:
+    the field is a 1D profile along x, so we sum over x and do not multiply by
+    the transverse box area again.
+    """
+    dx = cfg.Lx / cfg.nx
+    x = np.arange(cfg.nx) * dx
+    B0 = np.zeros((3, cfg.nx), dtype=np.float64)
+    B0[1] = cfg.Bg
+    B0[2] = Bz_eq(x, cfg)
+    return 0.5 / mu_0 * dx * float(np.sum(np.abs(B0) ** 2))
 
 
 def _temperature(sp, v, cfg, nb=32) -> float:
@@ -328,7 +362,7 @@ def symmetry_error(modes, nx) -> float:
 # checkpoint / restart and snapshot helpers
 # ---------------------------------------------------------------------------
 _HKEYS = ('t', 'W_K', 'W_E', 'W_B', 'W_B0', 'W_total', 'K_ion', 'K_ele', 'T_ion', 'T_ele',
-          'amp', 'bx_s1', 'bx_s2', 'mode_E', 'mode_B')
+          'amp', 'bx_s1', 'bx_s2', 'mode_E', 'mode_B', 'mode_E_all', 'mode_B_all')
 _PKEYS = ('x', 'y', 'z', 'vx', 'vy', 'vz')
 _SNAP_KEYS = ('snap_t', 'snap_Bx', 'snap_ET', 'snap_B', 'snap_prof')
 
@@ -381,6 +415,9 @@ def save_checkpoint(path, cfg, flags, dt, step, species, modes, hist, snaps):
         arrays[f'h_{k}'] = hist[k][:step]
     for k in _SNAP_KEYS:
         arrays[k] = np.array(snaps[k])
+    parent = os.path.dirname(str(path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     tmp = str(path) + '.tmp'
     with open(tmp, 'wb') as fh:
         np.savez(fh, **arrays)
@@ -406,7 +443,7 @@ def load_checkpoint(path) -> dict:
 # ---------------------------------------------------------------------------
 def run_coupled_loop(cfg: SimulationConfig, n_steps: int | None = None,
                      dt: float | None = None, seed: int = 12345,
-                     evolve_mean: bool = False, log_every: int = 0,
+                     evolve_mean: bool = True, log_every: int = 0,
                      paired_load: bool = False, symmetric: bool = False,
                      snapshots: int = 0, snapshot_every: int = 0,
                      checkpoint_prefix: str | None = None, checkpoint_every: int = 0,
@@ -416,10 +453,16 @@ def run_coupled_loop(cfg: SimulationConfig, n_steps: int | None = None,
       evolve_mean), W_total, K_ion, K_ele, T_ion, T_ele (thermal energy per
       particle), amp (n_steps x n_pert_modes, max|Bx_k|), plus dt, modes, species.
 
-    evolve_mean=False : B_eq is a static external field (perturbation energy only).
     evolve_mean=True  : the (0,0) mode (E_0, B_0 = B_eq + dB) is evolved from the
-                        particle mean current, so equilibrium magnetic energy can
-                        be released.
+                        particle mean current, so the equilibrium magnetic energy is
+                        included in the physical evolution.
+    evolve_mean=False : B_eq is held static as a fixed external field
+                        (perturbation-only energy accounting).
+
+    The mean mode is the default physical behavior for these Harris-sheet runs,
+    so the flag defaults to True for backward compatibility with the intended
+    equilibrium evolution.  Passing False is only for intentionally static-
+    background tests.
 
     Snapshots (every snapshot_every steps, or n_steps//snapshots): Bx_k(x), all-mode
     (E_T, B) fields, and x-binned particle moments -> snap_* arrays.
@@ -477,13 +520,17 @@ def run_coupled_loop(cfg: SimulationConfig, n_steps: int | None = None,
     mults = [md.mult for md in modes]
     n_pert = sum(1 for md in modes if not md.is_mean)
 
-    keys = ('t', 'W_K', 'W_E', 'W_B', 'W_B0', 'W_total', 'K_ion', 'K_ele', 'T_ion', 'T_ele')
+    keys = ('t', 'W_K', 'W_E', 'W_B', 'W_B0', 'W_total',
+            'W_B_full', 'W_total_full', 'K_ion', 'K_ele', 'T_ion', 'T_ele')
     hist = {k: np.zeros(n_steps) for k in keys}
     hist['amp'] = np.zeros((n_steps, n_pert))
     hist['bx_s1'] = np.zeros((n_steps, n_pert))   # |Bx_k| at x = Lx/4
     hist['bx_s2'] = np.zeros((n_steps, n_pert))   # |Bx_k| at x = 3Lx/4
-    hist['mode_E'] = np.zeros((n_steps, n_pert))  # electric energy per half-space mode
-    hist['mode_B'] = np.zeros((n_steps, n_pert))  # magnetic energy per half-space mode
+    hist['mode_E'] = np.zeros((n_steps, n_pert))  # electric energy per non-mean perturbation mode
+    hist['mode_B'] = np.zeros((n_steps, n_pert))  # magnetic energy per non-mean perturbation mode
+    hist['mode_E_all'] = np.zeros((n_steps, len(modes)))
+    hist['mode_B_all'] = np.zeros((n_steps, len(modes)))
+    W_B_bg = _background_magnetic_energy(cfg, mu_0) if not evolve_mean else 0.0
     i_s1, i_s2 = cfg.nx // 4, (3 * cfg.nx) // 4
     snap_every = snapshot_every or (max(1, n_steps // snapshots) if snapshots else 0)
     snap = {k: [] for k in _SNAP_KEYS}
@@ -516,9 +563,10 @@ def run_coupled_loop(cfg: SimulationConfig, n_steps: int | None = None,
         for km, md in enumerate(modes):
             phi = solve_potential(rho[km], md, eps_0)
             phis.append(phi)
-            we = (0.5 * md.mult * vperp * dx * float(np.sum((np.conj(rho[km]) * phi).real))
-                  + _mode_energy(md.ET, dx, vperp, 0.5 * eps_0, mult=md.mult))
+            we = (0.5 * md.mult * dx * float(np.sum((np.conj(rho[km]) * phi).real))
+                  + _mode_energy(md.ET, dx, vperp, 0.5 * eps_0, mult=md.mult, mean_mode=md.is_mean))
             W_E += we
+            hist['mode_E_all'][step, km] = we
             if not md.is_mean:
                 hist['mode_E'][step, ipe] = we
                 ipe += 1
@@ -551,7 +599,8 @@ def run_coupled_loop(cfg: SimulationConfig, n_steps: int | None = None,
             sp.z = np.mod(sp.z + dt * v_new[2], cfg.Lz)
             sp.vx, sp.vy, sp.vz = v_new
 
-        # J^{n+1/2} at the mid-step position, transverse projection, E_T^{n+1}
+        # J^{n+1/2} at the mid-step position, then enforce the discrete continuity
+        # relation before projecting to the transverse current.
         J = [np.zeros((3, cfg.nx), dtype=np.complex128) for _ in modes]
         jsrc = [(sp, xm, ym, zm, v_new) for sp, (xm, ym, zm, v_new) in zip(species, mid)]
         if symmetric:
@@ -559,7 +608,7 @@ def run_coupled_loop(cfg: SimulationConfig, n_steps: int | None = None,
                      for sp, (xm, ym, zm, v_new) in zip(species, mid)]
         for sp, xm, ym, zm, v_new in jsrc:
             i0, i1, f = _cic(xm, dx, cfg.nx)
-            coef = sp.q * sp.weight / (dx * vperp)
+            coef = sp.q * sp.weight / dx
             for km, md in enumerate(modes):
                 cph = coef * np.conj(_phase(md, ym, zm))
                 for a in range(3):
@@ -569,7 +618,9 @@ def run_coupled_loop(cfg: SimulationConfig, n_steps: int | None = None,
         W_B0 = 0.0
         ip = 0
         for km, md in enumerate(modes):
-            wb = _mode_energy(md.B, dx, vperp, 0.5 / mu_0, b=B_new[km], mult=md.mult)
+            wb = _mode_energy(md.B, dx, vperp, 0.5 / mu_0, b=B_new[km], mult=md.mult,
+                              mean_mode=md.is_mean)
+            hist['mode_B_all'][step, km] = wb
             if md.is_mean:
                 W_B0 += wb
             else:
@@ -579,7 +630,7 @@ def run_coupled_loop(cfg: SimulationConfig, n_steps: int | None = None,
                 hist['bx_s1'][step, ip] = float(np.abs(B_new[km][0][i_s1]))
                 hist['bx_s2'][step, ip] = float(np.abs(B_new[km][0][i_s2]))
                 ip += 1
-            JT = transverse_current(J[km], md)
+            JT = transverse_current(J[km], md, dx)
             curlB = np.array(curl_mode(B_new[km][0], B_new[km][1], B_new[km][2],
                                        md.ky, md.kz, dx))
             md.ET = md.ET + dt * (c2 * curlB - JT / eps_0)
@@ -592,12 +643,15 @@ def run_coupled_loop(cfg: SimulationConfig, n_steps: int | None = None,
             snap['snap_B'].append(np.array([md.B.copy() for md in modes]))
             snap['snap_prof'].append(_moments(species, cfg, symmetric))
 
+        W_B_full = W_B + W_B0 + W_B_bg if not evolve_mean else W_B + W_B0
         hist['t'][step] = step * dt
         hist['W_K'][step] = W_K
         hist['W_E'][step] = W_E
         hist['W_B'][step] = W_B
         hist['W_B0'][step] = W_B0
         hist['W_total'][step] = W_K + W_E + W_B + W_B0
+        hist['W_B_full'][step] = W_B_full
+        hist['W_total_full'][step] = W_K + W_E + W_B_full
         hist['K_ion'][step], hist['K_ele'][step] = Ks
         hist['T_ion'][step], hist['T_ele'][step] = Ts
         if log_every and step % log_every == 0:

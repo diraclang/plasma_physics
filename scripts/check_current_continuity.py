@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))
 import numpy as np
 
 from config import SimulationConfig, ModeSpec
-from coupled_loop import _cic, _ddx, _phase, build_modes, deposit_current_with_continuity, deposit_rho
+from coupled_loop import _cic, _ddx, _phase, build_modes, deposit_rho
 from particles import load_species
 from equilibrium import derive_units as derive_cfg_units
 from numpy.random import default_rng

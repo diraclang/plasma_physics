@@ -51,12 +51,25 @@ class TransverseModeState:
 
 def curl_mode(Fx: np.ndarray, Fy: np.ndarray, Fz: np.ndarray,
                ky: float, kz: float, dx: float):
-    dFz_dx = _central_diff_periodic(Fz, dx)
-    dFy_dx = _central_diff_periodic(Fy, dx)
-    curl_x = 1j * ky * Fz - 1j * kz * Fy
-    curl_y = 1j * kz * Fx - dFz_dx
-    curl_z = dFy_dx - 1j * ky * Fx
-    return curl_x, curl_y, curl_z
+    """Exact x-Fourier curl for the retained mixed Fourier representation.
+
+    The x-direction is periodic, so the derivative operator is represented by the
+    exact spectral symbol i*kx, rather than by a real-space finite-difference
+    stencil. This keeps the update consistent with the rest of the mode solve and
+    avoids the ad hoc mixed real-space/fourier discretization.
+    """
+    kx = 2.0 * np.pi * np.fft.fftfreq(Fx.size, d=dx)
+    Fx_hat = np.fft.fft(Fx)
+    Fy_hat = np.fft.fft(Fy)
+    Fz_hat = np.fft.fft(Fz)
+
+    curl_x_hat = 1j * ky * Fz_hat - 1j * kz * Fy_hat
+    curl_y_hat = 1j * kz * Fx_hat - 1j * kx * Fz_hat
+    curl_z_hat = 1j * kx * Fy_hat - 1j * ky * Fx_hat
+
+    return (np.fft.ifft(curl_x_hat),
+            np.fft.ifft(curl_y_hat),
+            np.fft.ifft(curl_z_hat))
 
 
 def leapfrog_step(state: TransverseModeState, JTx: np.ndarray, JTy: np.ndarray,

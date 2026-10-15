@@ -116,9 +116,11 @@ def _mean_density(cfg: SimulationConfig, n_grid: int = 20000) -> float:
 
 
 def _weight(cfg: SimulationConfig) -> float:
-    """Physical particles represented per macroparticle, such that
-    particles_per_cell macroparticles at the sheet peak density (n=1)
-    correspond to a real number density of n0=1 (in code units, since n0=1
-    by our unit convention)."""
-    cell_volume = (cfg.Lx / cfg.nx) * cfg.Ly * cfg.Lz
-    return cell_volume / cfg.particles_per_cell
+    """Physical particles represented per macroparticle in the x-only
+    normalization used by the reduced model.
+
+    The density profile n(x) is defined per unit x length (the y,z dependence
+    is carried by the retained Fourier modes, not by a resolved transverse grid),
+    so each particle represents an x-cell measure dx / particles_per_cell.
+    """
+    return (cfg.Lx / cfg.nx) / cfg.particles_per_cell

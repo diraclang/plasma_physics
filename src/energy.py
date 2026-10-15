@@ -2,16 +2,15 @@
 
 The code stores the transverse electromagnetic fields mode by mode, with the
 x-direction on a real grid and the periodic y,z dependence expanded in a
-retained set of Fourier modes. The total energy of the system is therefore
-computed as
+retained set of Fourier modes. The total field energy is therefore obtained by
+Parseval's theorem as a sum over the retained mode amplitudes:
 
-    E_total = E_kinetic + E_electric + E_magnetic
+    E_field = sum_{modes} [ 0.5 * eps_0 * integral_x |E_mode|^2 dx
+                         + 0.5 / mu_0 * integral_x |B_mode|^2 dx ]
 
-where the field energies are accumulated over the x-grid for every retained
-mode:
-
-    E_electric = 0.5 * eps_0 * sum_x (|E_x|^2 + |E_y|^2 + |E_z|^2) dx
-    E_magnetic = 0.5 / mu_0 * sum_x (|B_x|^2 + |B_y|^2 + |B_z|^2) dx
+This is equivalent to the full real-space box integral, but it makes the
+Fourier-mode bookkeeping explicit and is the natural formulation for the mode-
+resolved solver used here.
 
 The kinetic energy is the usual PIC sum over particles:
 
@@ -32,22 +31,43 @@ def _as_mode_list(state_or_states):
     return [state_or_states]
 
 
+def mode_magnetic_energy(state, dx: float, mu_0: float = 1.0) -> float:
+    """Return the magnetic energy of one Fourier-mode state.
+
+    The retained fields are already the x-grid amplitudes for a single Fourier
+    harmonic, so the total magnetic energy is just the x-integral of |B|^2 in
+    that mode. Summing over retained modes is the mode-space analogue of
+    integrating |B|^2 over the full box.
+    """
+    B2 = (
+        np.abs(state.Bx) ** 2 +
+        np.abs(state.By) ** 2 +
+        np.abs(state.Bz) ** 2
+    )
+    return float(np.real(0.5 / mu_0 * np.sum(B2) * dx))
+
+
+def mode_electric_energy(state, dx: float, eps_0: float = 0.04) -> float:
+    """Return the electric-field energy of one Fourier-mode state."""
+    E2 = (
+        np.abs(state.ETx) ** 2 +
+        np.abs(state.ETy) ** 2 +
+        np.abs(state.ETz) ** 2
+    )
+    return float(np.real(0.5 * eps_0 * np.sum(E2) * dx))
+
+
 def field_energy(state_or_states, dx: float, eps_0: float = 0.04, mu_0: float = 1.0) -> float:
-    """Return the total electric + magnetic field energy for one or more mode states."""
+    """Return the total electric + magnetic field energy for one or more mode states.
+
+    This is the mode-resolved version of the box integral: each retained mode
+    contributes its own x-grid energy, and the total is the sum over modes.
+    """
     states = _as_mode_list(state_or_states)
     energy = 0.0
     for state in states:
-        E2 = (
-            np.abs(state.ETx) ** 2 +
-            np.abs(state.ETy) ** 2 +
-            np.abs(state.ETz) ** 2
-        )
-        B2 = (
-            np.abs(state.Bx) ** 2 +
-            np.abs(state.By) ** 2 +
-            np.abs(state.Bz) ** 2
-        )
-        energy += 0.5 * eps_0 * np.sum(E2) * dx + 0.5 / mu_0 * np.sum(B2) * dx
+        energy += mode_electric_energy(state, dx, eps_0=eps_0)
+        energy += mode_magnetic_energy(state, dx, mu_0=mu_0)
     return float(np.real(energy))
 
 

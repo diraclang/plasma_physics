@@ -20,15 +20,21 @@ from coupled_loop import run_coupled_loop
 def main():
     n_steps = int(sys.argv[1]) if len(sys.argv) > 1 else 10000
     ppc = int(sys.argv[2]) if len(sys.argv) > 2 else 153   # ~20,000 particles/species at nx=256
+    resume = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] != 'none' else None
 
     # 1993 geometry: Lx=Ly=Lz=256, lambda=20, dx=lambda_De; (0,1) resonates at x=64,192
     cfg = SimulationConfig(
         Lx=256.0, Ly=256.0, Lz=256.0, lam=20.0, B0=4.0, Bg=4.0,
-        nx=256, particles_per_cell=ppc, dt=0.05,
+        nx=256, particles_per_cell=ppc, dt=0.1,
         modes=mode_range(range(-3, 4), range(-1, 2), seed_amplitude=1.0e-3),
     )
+    run_dir = ROOT / 'runs' / f'long_run_ppc{ppc}'
+    run_dir.mkdir(parents=True, exist_ok=True)
+    prefix = str(run_dir / f'long_run_ppc{ppc}')
     h = run_coupled_loop(cfg, n_steps=n_steps, evolve_mean=True, paired_load=True,
-                         log_every=max(1, n_steps // 25))
+                         log_every=max(1, n_steps // 25),
+                         checkpoint_prefix=prefix, checkpoint_every=1000, keep_every=5000,
+                         resume_from=resume)
 
     t = h['t']
     W = h['W_total']

@@ -1,0 +1,11 @@
+# Generated simulation outputs and diagnostics
+runs/
+plots/
+parallel-computing/
+__pycache__/
+*.pyc
+*.npz
+*.png
+*.gif
+*.csv
+*.log

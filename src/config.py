@@ -49,12 +49,13 @@ class ModeSpec:
     """
     m: int
     n: int
-    # optional small seed perturbation amplitude (fraction of B0) to kick this
-    # mode unstable at t=0; if 0.0, only PIC particle noise seeds the mode.
-    seed_amplitude: float = 1.0e-4
+    # Optional perturbation amplitude (fraction of B0) used to initialize this
+    # mode at t=0. Default is zero: no initial magnetic seed is imposed unless a
+    # caller explicitly asks for one.
+    seed_amplitude: float = 0.0
 
 
-def mode_range(m_values, n_values, seed_amplitude: float = 1.0e-4,
+def mode_range(m_values, n_values, seed_amplitude: float = 0.0,
                exclude_origin: bool = True) -> List[ModeSpec]:
     """Convenience helper: build a list of ModeSpec covering every combination
     of the given m and n integer values. E.g.
@@ -83,7 +84,9 @@ class SimulationConfig:
     lam: float = 20.0         # Harris sheet scale length lambda, in lambda_De
     B0: float = 4.0           # reversing field peak amplitude (Bz)
     Bg: float = 4.0           # uniform guide field amplitude (By)
-    n_bg: float = 0.2         # uniform background density, in units of n0
+    n_bg: float = 0.0         # uniform background density, in units of n0
+                              # set to zero to match the pure Harris-sheet
+                              # equilibrium used in the paper
 
     # --- species ---
     mass_ratio: float = 4.0     # m_i / m_e
@@ -100,7 +103,7 @@ class SimulationConfig:
     # --- numerics ---
     nx: int = 256                  # number of grid cells in x (post-doubling)
     particles_per_cell: int = 200  # macroparticles per cell per species
-    dt: float = 0.05               # upper bound on the timestep, code time units;
+    dt: float = 0.1                # upper bound on the timestep, code time units;
                                   # the loop uses coupled_loop.stable_dt(), the
                                   # min of this and the physics limits
                                   # (Omega_ce dt<=0.1, omega_pe dt<=0.2, c dt/dx<=0.5).
