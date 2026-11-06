@@ -59,3 +59,41 @@ def northward_confining_b_field(
     xi = (rr - float(ramp_center_r)) / width
     ramp = 0.5 * (1.0 + np.tanh(xi))
     return np.array([0.0, 0.0, float(bz_outer) * ramp], dtype=float)
+
+
+def toroidal_b_field(
+    position: np.ndarray,
+    bphi_strength: float,
+    core_radius: float = 1.0,
+) -> np.ndarray:
+    """Return a background toroidal field B = B_phi e_phi from a central axial current.
+
+    A current along the z-axis produces an azimuthal field.  We approximate the
+    profile with a simple core/outer model:
+
+        B_phi = B0 * (r / r_core)           for r < r_core
+        B_phi = B0 * (r_core / r)          for r >= r_core
+
+    This keeps the field finite at the axis and captures the expected long-wire
+    falloff away from the core.
+    """
+    if bphi_strength == 0.0:
+        return np.zeros(3, dtype=float)
+
+    pos = np.asarray(position, dtype=float)
+    rxy = np.hypot(pos[0], pos[1])
+    if rxy == 0.0:
+        return np.zeros(3, dtype=float)
+
+    r_core = max(float(core_radius), 1e-6)
+    if rxy < r_core:
+        bphi = float(bphi_strength) * (rxy / r_core)
+    else:
+        bphi = float(bphi_strength) * (r_core / rxy)
+
+    phi = np.arctan2(pos[1], pos[0])
+    return np.array([
+        -bphi * np.sin(phi),
+        bphi * np.cos(phi),
+        0.0,
+    ], dtype=float)

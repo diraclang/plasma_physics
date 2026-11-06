@@ -9,6 +9,7 @@ from .fields import (
     corotation_e_field,
     dipole_b_field,
     northward_confining_b_field,
+    toroidal_b_field,
     uniform_northward_b_field,
 )
 from .pusher import boris_step
@@ -26,6 +27,15 @@ class DipoleRunConfig:
     outer_bz: float = 0.0
     outer_bz_r0: float = 8.0
     outer_bz_width: float = 0.8
+    toroidal_b: float = 0.0
+    toroidal_r0: float = 1.0
+    # Optional linear ramp of the external field inside a self-consistent run.
+    # The ramp runs from the values above to the *_end values over `ramp_steps`
+    # steps starting at step `ramp_start_step` of this run (0 ramp_steps = no ramp).
+    dipole_moment_end: tuple[float, float, float] | None = None
+    uniform_bz_end: float | None = None
+    ramp_start_step: int = 0
+    ramp_steps: int = 0
     x0: tuple[float, float, float] = (5.0, 0.0, 0.2)
     v0: tuple[float, float, float] = (0.0, 0.35, 0.2)
 
@@ -58,12 +68,17 @@ class SelfConsistentConfig:
     elementary_charge: float = 1.0
     mu0: float = 1.0
     include_hall: bool = False
+    hall_density_floor: float = 0.0
+    hall_wdt_max: float = 0.0
     evolve_magnetic: bool = False
     e_clip: float = 10.0
     j_clip: float = 10.0
     snapshot_stride: int = 20
     save_snapshots: bool = True
     heartbeat_every: int = 0
+    # Store the per-particle histories (x, v, K, mu) only every `history_stride`
+    # steps (the last step is always stored).  1 = every step (original behaviour).
+    history_stride: int = 1
 
 
 @dataclass
@@ -90,11 +105,16 @@ def run_single_particle(cfg: DipoleRunConfig) -> dict[str, np.ndarray]:
     mu = np.zeros(cfg.steps + 1, dtype=float)
 
     def record(i: int, x_now: np.ndarray, v_now: np.ndarray) -> None:
-        b_now = dipole_b_field(x_now, m) + uniform_northward_b_field(cfg.uniform_bz) + northward_confining_b_field(
-            x_now,
-            cfg.outer_bz,
-            cfg.outer_bz_r0,
-            cfg.outer_bz_width,
+        b_now = (
+            dipole_b_field(x_now, m)
+            + uniform_northward_b_field(cfg.uniform_bz)
+            + northward_confining_b_field(
+                x_now,
+                cfg.outer_bz,
+                cfg.outer_bz_r0,
+                cfg.outer_bz_width,
+            )
+            + toroidal_b_field(x_now, cfg.toroidal_b, cfg.toroidal_r0)
         )
         if cfg.with_corotation:
             e_now = corotation_e_field(x_now, b_now, omega)
@@ -116,11 +136,16 @@ def run_single_particle(cfg: DipoleRunConfig) -> dict[str, np.ndarray]:
     record(0, x, v)
 
     for i in range(1, cfg.steps + 1):
-        b = dipole_b_field(x, m) + uniform_northward_b_field(cfg.uniform_bz) + northward_confining_b_field(
-            x,
-            cfg.outer_bz,
-            cfg.outer_bz_r0,
-            cfg.outer_bz_width,
+        b = (
+            dipole_b_field(x, m)
+            + uniform_northward_b_field(cfg.uniform_bz)
+            + northward_confining_b_field(
+                x,
+                cfg.outer_bz,
+                cfg.outer_bz_r0,
+                cfg.outer_bz_width,
+            )
+            + toroidal_b_field(x, cfg.toroidal_b, cfg.toroidal_r0)
         )
         if cfg.with_corotation:
             e = corotation_e_field(x, b, omega)
@@ -199,6 +224,8 @@ def run_particle_ensemble(
             outer_bz=run_cfg.outer_bz,
             outer_bz_r0=run_cfg.outer_bz_r0,
             outer_bz_width=run_cfg.outer_bz_width,
+            toroidal_b=run_cfg.toroidal_b,
+            toroidal_r0=run_cfg.toroidal_r0,
             x0=tuple(x0s[i]),
             v0=tuple(v0s[i]),
         )
@@ -413,25 +440,46 @@ def run_particle_ensemble_self_consistent(
     dipole_moment = np.asarray(run_cfg.dipole_moment, dtype=float)
     omega = np.asarray(run_cfg.omega_vec, dtype=float)
 
-    br0 = np.zeros((self_cfg.nr, self_cfg.nz), dtype=float)
-    bphi0 = np.zeros((self_cfg.nr, self_cfg.nz), dtype=float)
-    bz0 = np.zeros((self_cfg.nr, self_cfg.nz), dtype=float)
-    for i, r in enumerate(r_grid):
-        for k, z in enumerate(z_grid):
-            p = np.array([r, 0.0, z], dtype=float)
-            b_cart = (
-                dipole_b_field(p, dipole_moment)
-                + uniform_northward_b_field(run_cfg.uniform_bz)
-                + northward_confining_b_field(
-                p,
-                run_cfg.outer_bz,
-                run_cfg.outer_bz_r0,
-                run_cfg.outer_bz_width,
+    def background_grid(m_vec: np.ndarray, ubz: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        br_g = np.zeros((self_cfg.nr, self_cfg.nz), dtype=float)
+        bphi_g = np.zeros((self_cfg.nr, self_cfg.nz), dtype=float)
+        bz_g = np.zeros((self_cfg.nr, self_cfg.nz), dtype=float)
+        for i, r in enumerate(r_grid):
+            for k, z in enumerate(z_grid):
+                p = np.array([r, 0.0, z], dtype=float)
+                b_cart = (
+                    dipole_b_field(p, m_vec)
+                    + uniform_northward_b_field(ubz)
+                    + northward_confining_b_field(
+                        p,
+                        run_cfg.outer_bz,
+                        run_cfg.outer_bz_r0,
+                        run_cfg.outer_bz_width,
+                    )
+                    + toroidal_b_field(p, run_cfg.toroidal_b, run_cfg.toroidal_r0)
                 )
-            )
-            br0[i, k] = b_cart[0]
-            bphi0[i, k] = b_cart[1]
-            bz0[i, k] = b_cart[2]
+                br_g[i, k] = b_cart[0]
+                bphi_g[i, k] = b_cart[1]
+                bz_g[i, k] = b_cart[2]
+        return br_g, bphi_g, bz_g
+
+    br0, bphi0, bz0 = background_grid(dipole_moment, run_cfg.uniform_bz)
+
+    # Optional external-field ramp (quasi-static: the background field changes in
+    # time but no inductive electric field is added).
+    ramping = run_cfg.ramp_steps > 0 and (
+        run_cfg.dipole_moment_end is not None or run_cfg.uniform_bz_end is not None
+    )
+    m_start = dipole_moment
+    m_end = (
+        np.asarray(run_cfg.dipole_moment_end, dtype=float)
+        if run_cfg.dipole_moment_end is not None
+        else dipole_moment
+    )
+    ubz_start = run_cfg.uniform_bz
+    ubz_end = run_cfg.uniform_bz_end if run_cfg.uniform_bz_end is not None else run_cfg.uniform_bz
+    if ramping:
+        br0_end, bphi0_end, bz0_end = background_grid(m_end, ubz_end)
 
     dbr = np.zeros_like(br0)
     dbphi = np.zeros_like(bphi0)
@@ -444,11 +492,18 @@ def run_particle_ensemble_self_consistent(
         if restart_state.dbz is not None:
             dbz = np.asarray(restart_state.dbz, dtype=float).copy()
 
-    xs = np.zeros((n_particles, ntime, 3), dtype=float)
-    vs = np.zeros((n_particles, ntime, 3), dtype=float)
-    ks = np.zeros((n_particles, ntime), dtype=float)
-    mus = np.zeros((n_particles, ntime), dtype=float)
+    stride_h = max(int(self_cfg.history_stride), 1)
+    hist_steps = [s for s in range(ntime) if s % stride_h == 0 or s == ntime - 1]
+    hist_index = {s: i for i, s in enumerate(hist_steps)}
+    n_hist = len(hist_steps)
+    xs = np.zeros((n_particles, n_hist, 3), dtype=float)
+    vs = np.zeros((n_particles, n_hist, 3), dtype=float)
+    ks = np.zeros((n_particles, n_hist), dtype=float)
+    mus = np.zeros((n_particles, n_hist), dtype=float)
+    k_mean_hist = np.zeros(ntime, dtype=float)
     density_mean = np.zeros(ntime, dtype=float)
+    dipole_mz_t = np.zeros(ntime, dtype=float)
+    uniform_bz_t = np.zeros(ntime, dtype=float)
     wall_t0 = time.perf_counter()
 
     snap_t_idx: list[int] = []
@@ -460,24 +515,43 @@ def run_particle_ensemble_self_consistent(
     snap_dbphi: list[np.ndarray] = []
 
     def record(step: int, pos_now: np.ndarray, vel_now: np.ndarray, e_cart: np.ndarray, b_cart: np.ndarray) -> None:
-        xs[:, step, :] = pos_now
-        vs[:, step, :] = vel_now
-        ks[:, step] = 0.5 * np.sum(vel_now * vel_now, axis=1)
+        k_now = 0.5 * np.sum(vel_now * vel_now, axis=1)
+        k_mean_hist[step] = float(np.mean(k_now))
+        h = hist_index.get(step)
+        if h is None:
+            return
+        xs[:, h, :] = pos_now
+        vs[:, h, :] = vel_now
+        ks[:, h] = k_now
 
         bmag = np.linalg.norm(b_cart, axis=1)
         bhat = np.divide(b_cart, np.maximum(bmag[:, None], 1e-12))
         vpar = np.sum(vel_now * bhat, axis=1)[:, None] * bhat
         vperp = vel_now - vpar
-        mus[:, step] = 0.5 * np.sum(vperp * vperp, axis=1) / np.maximum(bmag, 1e-12)
+        mus[:, h] = 0.5 * np.sum(vperp * vperp, axis=1) / np.maximum(bmag, 1e-12)
 
     for step in range(ntime):
         n, uir, uiphi, uiz = _deposit_axisymmetric_moments(x, v, r_grid, z_grid, dr, dz)
         n_eff = np.maximum(n, self_cfg.density_floor)
         density_mean[step] = float(np.mean(n_eff))
 
-        br = br0 + dbr
-        bphi = bphi0 + dbphi
-        bz = bz0 + dbz
+        if ramping:
+            s_ramp = min(max((step - run_cfg.ramp_start_step) / run_cfg.ramp_steps, 0.0), 1.0)
+            m_now = m_start + s_ramp * (m_end - m_start)
+            ubz_now = ubz_start + s_ramp * (ubz_end - ubz_start)
+            br0_t = br0 + s_ramp * (br0_end - br0)
+            bphi0_t = bphi0 + s_ramp * (bphi0_end - bphi0)
+            bz0_t = bz0 + s_ramp * (bz0_end - bz0)
+        else:
+            m_now = dipole_moment
+            ubz_now = run_cfg.uniform_bz
+            br0_t, bphi0_t, bz0_t = br0, bphi0, bz0
+        dipole_mz_t[step] = m_now[2]
+        uniform_bz_t[step] = ubz_now
+
+        br = br0_t + dbr
+        bphi = bphi0_t + dbphi
+        bz = bz0_t + dbz
 
         if self_cfg.save_snapshots and (
             step == 0 or step == run_cfg.steps or step % max(self_cfg.snapshot_stride, 1) == 0
@@ -509,7 +583,19 @@ def run_particle_ensemble_self_consistent(
 
         # Hall term: (J x B) / (e n)
         if self_cfg.include_hall:
-            denom = self_cfg.elementary_charge * n_eff
+            n_hall = np.maximum(n_eff, self_cfg.hall_density_floor)
+            if self_cfg.hall_wdt_max > 0.0:
+                # Whistler limiter: raise the density seen by the Hall term until
+                # omega_max*dt <= hall_wdt_max, with omega_max = k_max^2 |B| / (mu0 e n)
+                # and k_max^2 = pi^2 (1/dr^2 + 1/dz^2).
+                bmag = np.sqrt(br * br + bphi * bphi + bz * bz)
+                k2_max = np.pi**2 * (1.0 / dr**2 + 1.0 / dz**2)
+                n_whistler = (
+                    k2_max * run_cfg.dt * bmag
+                    / (self_cfg.mu0 * self_cfg.elementary_charge * self_cfg.hall_wdt_max)
+                )
+                n_hall = np.maximum(n_hall, n_whistler)
+            denom = self_cfg.elementary_charge * n_hall
             e_r += (j_phi * bz - j_z * bphi) / denom
             e_phi += (j_z * br - j_r * bz) / denom
             e_z += (j_r * bphi - j_phi * br) / denom
@@ -542,14 +628,15 @@ def run_particle_ensemble_self_consistent(
         db_cart = _cylindrical_to_cartesian_vectors(dbpr, dbpphi, dbpz, x)
         b0_cart = np.array(
             [
-                dipole_b_field(p, dipole_moment)
-                + uniform_northward_b_field(run_cfg.uniform_bz)
+                dipole_b_field(p, m_now)
+                + uniform_northward_b_field(ubz_now)
                 + northward_confining_b_field(
                     p,
                     run_cfg.outer_bz,
                     run_cfg.outer_bz_r0,
                     run_cfg.outer_bz_width,
                 )
+                + toroidal_b_field(p, run_cfg.toroidal_b, run_cfg.toroidal_r0)
                 for p in x
             ]
         )
@@ -583,7 +670,10 @@ def run_particle_ensemble_self_consistent(
         ):
             elapsed = time.perf_counter() - wall_t0
             frac = step / max(run_cfg.steps, 1)
-            k_mean = float(np.mean(ks[:, step]))
+            k_mean = float(k_mean_hist[step])
+            ramp_msg = (
+                f"dipole_mz={m_now[2]:.3f} uniform_bz={ubz_now:.4f} " if ramping else ""
+            )
             print(
                 "[heartbeat] "
                 f"step={step}/{run_cfg.steps} "
@@ -591,17 +681,22 @@ def run_particle_ensemble_self_consistent(
                 f"progress={100.0 * frac:.1f}% "
                 f"density_mean={density_mean[step]:.4e} "
                 f"k_mean={k_mean:.4e} "
+                f"{ramp_msg}"
                 f"wall_s={elapsed:.1f}",
                 flush=True,
             )
 
+    t_all = time0 + np.arange(ntime, dtype=float) * run_cfg.dt
     return {
-        "t": time0 + np.arange(ntime, dtype=float) * run_cfg.dt,
+        "t": t_all[hist_steps],
         "x": xs,
         "v": vs,
         "K": ks,
         "mu": mus,
         "density_mean": density_mean,
+        "hist_step": np.asarray(hist_steps, dtype=int),
+        "dipole_mz_t": dipole_mz_t,
+        "uniform_bz_t": uniform_bz_t,
         "r_grid": r_grid,
         "z_grid": z_grid,
         "snap_t_idx": np.asarray(snap_t_idx, dtype=int),

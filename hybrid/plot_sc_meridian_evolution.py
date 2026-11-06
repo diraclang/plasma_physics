@@ -18,6 +18,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--plot-every", type=int, default=1, help="Use every Nth stored snapshot")
     p.add_argument("--r-max", type=float, default=None, help="Optional x-limit for meridian panel")
     p.add_argument("--z-max", type=float, default=None, help="Optional z-limit for meridian panel")
+    p.add_argument("--density-b", action="store_true", help="Also write a density + |B| figure (field lines colored by log10|B|)")
+    p.add_argument("--toroidal-b", type=float, default=0.0, help="Background toroidal B0 used in the run (for |B| in --density-b)")
+    p.add_argument("--toroidal-r0", type=float, default=1.0, help="Toroidal core radius used in the run (for |B| in --density-b)")
     return p.parse_args()
 
 
@@ -40,11 +43,67 @@ def _build_meridian_field(
         sign = -1.0 if x < 0.0 else 1.0
         ridx = int(np.argmin(np.abs(r_grid - abs(x))))
         bx[:, ix] = sign * br[ridx, :]
-        bz_plane[:, ix] = -bz[ridx, :]
+        # In the meridian x-z plane, Bz keeps the same sign as cylindrical bz.
+        bz_plane[:, ix] = bz[ridx, :]
         n_plane[:, ix] = n_rz[ridx, :]
 
     xx, zz = np.meshgrid(x_grid, z_grid)
     return x_grid, z_grid, xx, zz, n_plane, bx, bz_plane
+
+
+def _write_density_b_figure(
+    png_path: Path,
+    ids: np.ndarray,
+    snap_t_idx: np.ndarray,
+    snap_n: np.ndarray,
+    snap_br: np.ndarray,
+    snap_bz: np.ndarray,
+    snap_dbphi: np.ndarray | None,
+    r_grid: np.ndarray,
+    z_grid: np.ndarray,
+    t_snap: np.ndarray,
+    norm: matplotlib.colors.Normalize,
+    args: argparse.Namespace,
+) -> None:
+    r0 = max(float(args.toroidal_r0), 1e-6)
+    rr = r_grid[:, None]
+    bphi0 = np.where(rr < r0, args.toroidal_b * rr / r0, args.toroidal_b * r0 / np.maximum(rr, 1e-9))
+    bphi0 = bphi0 * np.ones((1, z_grid.size))
+
+    planes = []
+    for sid in ids:
+        dbphi = snap_dbphi[sid] if snap_dbphi is not None else 0.0
+        bmag_rz = np.sqrt(snap_br[sid] ** 2 + snap_bz[sid] ** 2 + (bphi0 + dbphi) ** 2)
+        bmag_plane = np.concatenate([bmag_rz[:0:-1, :], bmag_rz], axis=0).T
+        planes.append(np.log10(np.maximum(bmag_plane, 1e-12)))
+
+    x_grid = np.concatenate([-r_grid[:0:-1], r_grid])
+    xlim = args.r_max if args.r_max is not None else float(r_grid[-1])
+    zlim = args.z_max if args.z_max is not None else float(z_grid[-1])
+    xx, zz = np.meshgrid(x_grid, z_grid)
+    shown = (np.abs(xx) <= xlim) & (np.abs(zz) <= zlim)
+    allvals = np.concatenate([p[shown] for p in planes])
+    bnorm = matplotlib.colors.Normalize(vmin=float(np.percentile(allvals, 2)), vmax=float(np.percentile(allvals, 98)))
+
+    fig, axs = plt.subplots(1, len(ids), figsize=(6.4 * len(ids), 6.2), constrained_layout=True, squeeze=False)
+    pcm = None
+    strm = None
+    for ax, sid, logb in zip(axs[0], ids, planes, strict=False):
+        _x, zvec, xx, zz, n_plane, bx, bz_plane = _build_meridian_field(snap_n[sid], snap_br[sid], snap_bz[sid], r_grid, z_grid)
+        masked = np.ma.masked_where(n_plane <= 0.0, n_plane)
+        pcm = ax.pcolormesh(xx, zz, masked, shading="auto", cmap="magma", norm=norm)
+        strm = ax.streamplot(x_grid, zvec, bx, bz_plane, color=logb, cmap="cool", norm=bnorm, density=1.4, linewidth=0.9, arrowsize=0.8)
+        ax.set_title(f"t={t_snap[sid]:.2f}")
+        ax.set_xlabel("x")
+        ax.set_ylabel("z")
+        ax.set_xlim(-xlim, xlim)
+        ax.set_ylim(-zlim, zlim)
+        ax.set_aspect("equal")
+    fig.colorbar(pcm, ax=axs.ravel().tolist(), shrink=0.8, location="right", label="Ion density")
+    fig.colorbar(strm.lines, ax=axs.ravel().tolist(), shrink=0.8, location="right", label="log10 |B| (field lines, includes B_phi)")
+    fig.suptitle("Meridian plane: ion density (color map) + magnetic field lines colored by |B|")
+    fig.savefig(png_path, dpi=160)
+    plt.close(fig)
 
 
 def main() -> None:
@@ -73,6 +132,11 @@ def main() -> None:
     snap_n = snap_n[idx]
     snap_br = snap_br[idx]
     snap_bz = snap_bz[idx]
+    if "hist_step" in data.files and data["hist_step"].size == t.size:
+        # Particle histories were thinned: time is linear in the step number.
+        t_snap = np.interp(snap_t_idx, np.asarray(data["hist_step"], dtype=float), t)
+    else:
+        t_snap = t[snap_t_idx]
 
     positive = snap_n[snap_n > 0.0]
     if positive.size == 0:
@@ -107,7 +171,7 @@ def main() -> None:
         masked = np.ma.masked_where(n_plane <= 0.0, n_plane)
         pcm = ax.pcolormesh(xx, zz, masked, shading="auto", cmap="magma", norm=norm)
         ax.streamplot(x_grid, zvec, bx, bz_plane, color="w", density=1.2, linewidth=0.7, arrowsize=0.8)
-        ts = t[snap_t_idx[sid]]
+        ts = t_snap[sid]
         ax.set_title(f"t={ts:.3f}")
         ax.set_xlabel("x")
         ax.set_ylabel("z")
@@ -137,7 +201,7 @@ def main() -> None:
         masked = np.ma.masked_where(n_plane <= 0.0, n_plane)
         ax2.pcolormesh(xx, zz, masked, shading="auto", cmap="magma", norm=norm)
         ax2.streamplot(x_grid, zvec, bx, bz_plane, color="w", density=1.2, linewidth=0.7, arrowsize=0.8)
-        ts = t[snap_t_idx[sid]]
+        ts = t_snap[sid]
         ax2.set_title(f"t={ts:.3f}")
         ax2.set_xlabel("x")
         ax2.set_ylabel("z")
@@ -155,6 +219,17 @@ def main() -> None:
     plt.close(fig2)
     print(f"saved: {png_path}")
     print(f"saved: {gif_path}")
+
+    if args.density_b:
+        dbphi_all = None
+        if "snap_dbphi" in data.files and data["snap_dbphi"].size > 0:
+            dbphi_all = np.asarray(data["snap_dbphi"], dtype=float)[idx]
+        db_ids = np.unique(np.linspace(0, snap_t_idx.size - 1, 3).astype(int))
+        db_path = out_prefix.with_name(out_prefix.name + "_density_B.png")
+        _write_density_b_figure(
+            db_path, db_ids, snap_t_idx, snap_n, snap_br, snap_bz, dbphi_all, r_grid, z_grid, t_snap, norm, args
+        )
+        print(f"saved: {db_path}")
 
 
 if __name__ == "__main__":

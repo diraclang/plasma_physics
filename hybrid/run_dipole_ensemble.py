@@ -26,6 +26,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--outer-bz", type=float, default=0.0, help="Northward confining field strength outside ramp")
     p.add_argument("--outer-bz-r0", type=float, default=8.0, help="Ramp center radius for outer confining field")
     p.add_argument("--outer-bz-width", type=float, default=0.8, help="Ramp width for outer confining field")
+    p.add_argument("--toroidal-b", type=float, default=0.0, help="Toroidal background field strength B_phi from central axial current")
+    p.add_argument("--toroidal-r0", type=float, default=1.0, help="Core radius used in the toroidal B_phi profile")
+    p.add_argument("--dipole-scale-end", type=float, default=None, help="Ramp the dipole scale linearly from --dipole-scale to this value (needs --self-consistent)")
+    p.add_argument("--uniform-bz-end", type=float, default=None, help="Ramp the uniform Bz linearly from --uniform-bz to this value (needs --self-consistent)")
+    p.add_argument("--ramp-start-step", type=int, default=0, help="Step of this run at which the ramp starts")
+    p.add_argument("--ramp-steps", type=int, default=0, help="Ramp duration in steps (0 = ramp over the rest of the run)")
     p.add_argument("--n", type=int, default=96, help="Number of particles")
     p.add_argument("--ring-radius", type=float, default=5.0)
     p.add_argument("--radial-spread", type=float, default=0.3)
@@ -44,11 +50,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--resistivity", type=float, default=0.0)
     p.add_argument("--density-floor", type=float, default=1e-4)
     p.add_argument("--with-hall", action="store_true", help="Enable Hall term in Ohm law")
+    p.add_argument("--hall-density-floor", type=float, default=0.0, help="Minimum density used in the Hall-term denominator (0 = use --density-floor)")
+    p.add_argument("--hall-wdt-max", type=float, default=0.0, help="Cap on whistler omega_max*dt per cell via a |B|-dependent Hall density (0 = off)")
     p.add_argument("--evolve-magnetic", action="store_true", help="Evolve perturbation magnetic field with Faraday")
     p.add_argument("--e-clip", type=float, default=10.0, help="Clip each electric-field component on grid")
     p.add_argument("--j-clip", type=float, default=10.0, help="Clip each current component on grid")
     p.add_argument("--snapshot-stride", type=int, default=20, help="Store self-consistent grid snapshots every N steps")
     p.add_argument("--heartbeat-every", type=int, default=0, help="Print progress every N steps in self-consistent mode")
+    p.add_argument("--history-stride", type=int, default=1, help="Store particle histories (x, v, K, mu) only every N steps; the last step is always stored (self-consistent mode)")
     p.add_argument("--restart-input", type=str, default=None, help="Existing NPZ to continue from final state")
     p.add_argument("--output", type=str, default="hybrid/output/ensemble.npz")
     return p.parse_args()
@@ -56,6 +65,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    ramp_requested = args.dipole_scale_end is not None or args.uniform_bz_end is not None
+    if ramp_requested and not args.self_consistent:
+        raise SystemExit("--dipole-scale-end / --uniform-bz-end require --self-consistent")
+    ramp_steps = args.ramp_steps if args.ramp_steps > 0 else max(args.steps - args.ramp_start_step, 0)
     run_cfg = DipoleRunConfig(
         steps=args.steps,
         dt=args.dt,
@@ -67,6 +80,12 @@ def main() -> None:
         outer_bz=args.outer_bz,
         outer_bz_r0=args.outer_bz_r0,
         outer_bz_width=args.outer_bz_width,
+        toroidal_b=args.toroidal_b,
+        toroidal_r0=args.toroidal_r0,
+        dipole_moment_end=(0.0, 0.0, args.dipole_scale_end) if args.dipole_scale_end is not None else None,
+        uniform_bz_end=args.uniform_bz_end,
+        ramp_start_step=args.ramp_start_step,
+        ramp_steps=ramp_steps if ramp_requested else 0,
     )
     ens_cfg = EnsembleConfig(
         n_particles=args.n,
@@ -91,12 +110,15 @@ def main() -> None:
         resistivity=args.resistivity,
         density_floor=args.density_floor,
         include_hall=args.with_hall,
+        hall_density_floor=args.hall_density_floor,
+        hall_wdt_max=args.hall_wdt_max,
         evolve_magnetic=args.evolve_magnetic,
         e_clip=args.e_clip,
         j_clip=args.j_clip,
         snapshot_stride=args.snapshot_stride,
         save_snapshots=True,
         heartbeat_every=args.heartbeat_every,
+        history_stride=args.history_stride,
     )
 
     restart_state = None
@@ -139,6 +161,7 @@ def main() -> None:
         K=result["K"],
         mu=result["mu"],
         density_mean=result.get("density_mean", np.array([], dtype=float)),
+        hist_step=result.get("hist_step", np.array([], dtype=int)),
         r_grid=result.get("r_grid", np.array([], dtype=float)),
         z_grid=result.get("z_grid", np.array([], dtype=float)),
         snap_t_idx=result.get("snap_t_idx", np.array([], dtype=int)),
@@ -148,6 +171,8 @@ def main() -> None:
         snap_dbr=result.get("snap_dbr", np.array([], dtype=float)),
         snap_dbz=result.get("snap_dbz", np.array([], dtype=float)),
         snap_dbphi=result.get("snap_dbphi", np.array([], dtype=float)),
+        dipole_mz_t=result.get("dipole_mz_t", np.array([], dtype=float)),
+        uniform_bz_t=result.get("uniform_bz_t", np.array([], dtype=float)),
         with_corotation=args.with_corotation,
         omega=args.omega,
         self_consistent=args.self_consistent,

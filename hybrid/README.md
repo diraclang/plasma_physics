@@ -116,6 +116,43 @@ python hybrid/run_dipole_ensemble.py \
 
 When `--heartbeat-every` is set, the run prints periodic progress lines with step, sim time, density mean, kinetic mean, and elapsed wall time.
 
+## Saved Run Parameters: Dipole-Only 5x Scenario
+
+Fresh run from t=0 to t=12 with dipole ramp 20 -> 100 and no external added fields:
+
+```bash
+python hybrid/run_dipole_ensemble.py \
+	--self-consistent --evolve-magnetic --with-hall \
+	--hall-density-floor 10 --hall-wdt-max 0.1 \
+	--electron-temp 0.0002 --density-floor 1 \
+	--n 10000 --steps 12000 --dt 0.001 \
+	--ring-radius 5.0 --radial-spread 0.1 --z-spread 0.1 \
+	--phi-center-deg 0 --phi-spread-deg 8 \
+	--speed 0.02 --vz-spread 0.003 \
+	--dipole-scale 20 --dipole-scale-end 100 \
+	--uniform-bz 0.0 --outer-bz 0.0 --toroidal-b 0.0 --toroidal-r0 1.0 \
+	--sc-nr 64 --sc-nz 96 --sc-r-max 10 --sc-z-max 6 \
+	--e-clip 2 --j-clip 2 --snapshot-stride 20 --heartbeat-every 200 \
+	--history-stride 50 \
+	--output hybrid/output/sc_Te2e4_f1_dipoleonly_ramp5x_fresh_12000.npz
+```
+
+Continuation for another 12,000 steps with dipole held at 100 (no further ramp):
+
+```bash
+python hybrid/run_dipole_ensemble.py \
+	--self-consistent --evolve-magnetic --with-hall \
+	--hall-density-floor 10 --hall-wdt-max 0.1 \
+	--electron-temp 0.0002 --density-floor 1 \
+	--restart-input hybrid/output/sc_Te2e4_f1_dipoleonly_ramp5x_fresh_12000.npz \
+	--steps 12000 --dt 0.001 --dipole-scale 100 \
+	--uniform-bz 0.0 --outer-bz 0.0 --toroidal-b 0.0 --toroidal-r0 1.0 \
+	--sc-nr 64 --sc-nz 96 --sc-r-max 10 --sc-z-max 6 \
+	--e-clip 2 --j-clip 2 --snapshot-stride 20 --heartbeat-every 200 \
+	--history-stride 50 \
+	--output hybrid/output/sc_Te2e4_f1_dipoleonly_hold100_cont_12000.npz
+```
+
 With corotation electric field:
 
 ```bash
