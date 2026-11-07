@@ -41,9 +41,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--speed", type=float, default=0.4)
     p.add_argument("--vz-spread", type=float, default=0.1)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--self-consistent", action="store_true", help="Enable axisymmetric self-consistent hybrid update")
+    p.add_argument("--seed-mode-m", type=int, default=0, help="Seed an azimuthal density perturbation 1 + A cos(m phi) in the initial particles (0 = off)")
+    p.add_argument("--seed-mode-amp", type=float, default=0.0, help="Relative amplitude A of the seeded azimuthal perturbation")
+    p.add_argument("--self-consistent", action="store_true", help="Enable self-consistent hybrid update (axisymmetric if --sc-nphi 1)")
     p.add_argument("--sc-nr", type=int, default=96)
     p.add_argument("--sc-nz", type=int, default=128)
+    p.add_argument("--sc-nphi", type=int, default=1, help="Azimuthal grid planes (1 = axisymmetric)")
+    p.add_argument("--sc-r-min", type=float, default=0.0, help="Inner radius of the grid (use >0 for an annulus that avoids the axis)")
+    p.add_argument("--particle-weight", type=float, default=1.0, help="Weight per macro-particle (density = weight*count/volume); use 10000/N to keep the density of the 10k-particle runs")
+    p.add_argument("--snapshot3d-stride", type=int, default=0, help="Save full (nr,nphi,nz) float32 snapshots every N steps when --sc-nphi > 1 (0 = off)")
     p.add_argument("--sc-r-max", type=float, default=10.0)
     p.add_argument("--sc-z-max", type=float, default=6.0)
     p.add_argument("--electron-temp", type=float, default=0.05)
@@ -97,12 +103,14 @@ def main() -> None:
         speed=args.speed,
         vz_spread=args.vz_spread,
         seed=args.seed,
+        seed_mode_m=args.seed_mode_m,
+        seed_mode_amp=args.seed_mode_amp,
     )
     sc_cfg = SelfConsistentConfig(
         enabled=args.self_consistent,
         nr=args.sc_nr,
         nz=args.sc_nz,
-        r_min=0.0,
+        r_min=args.sc_r_min,
         r_max=args.sc_r_max,
         z_min=-args.sc_z_max,
         z_max=args.sc_z_max,
@@ -119,6 +127,9 @@ def main() -> None:
         save_snapshots=True,
         heartbeat_every=args.heartbeat_every,
         history_stride=args.history_stride,
+        nphi=args.sc_nphi,
+        particle_weight=args.particle_weight,
+        snapshot3d_stride=args.snapshot3d_stride,
     )
 
     restart_state = None
@@ -134,12 +145,20 @@ def main() -> None:
         time0 = float(np.asarray(restart["t"], dtype=float)[-1]) if "t" in restart.files else 0.0
 
         dbr = dbphi = dbz = None
-        if "snap_dbr" in restart.files and restart["snap_dbr"].size > 0:
-            dbr = np.asarray(restart["snap_dbr"], dtype=float)[-1]
-        if "snap_dbphi" in restart.files and restart["snap_dbphi"].size > 0:
-            dbphi = np.asarray(restart["snap_dbphi"], dtype=float)[-1]
-        if "snap_dbz" in restart.files and restart["snap_dbz"].size > 0:
-            dbz = np.asarray(restart["snap_dbz"], dtype=float)[-1]
+        # Prefer the full (nr, nphi, nz) final fields of a 3D run; otherwise use the last
+        # (phi-averaged / axisymmetric) snapshot, which the solver extrudes over phi.
+        for name in ("dbr", "dbphi", "dbz"):
+            val = None
+            if f"last_{name}" in restart.files and restart[f"last_{name}"].size > 0:
+                val = np.asarray(restart[f"last_{name}"], dtype=float)
+            elif f"snap_{name}" in restart.files and restart[f"snap_{name}"].size > 0:
+                val = np.asarray(restart[f"snap_{name}"], dtype=float)[-1]
+            if name == "dbr":
+                dbr = val
+            elif name == "dbphi":
+                dbphi = val
+            else:
+                dbz = val
 
         restart_state = SelfConsistentRestartState(
             x=x_last,
@@ -153,8 +172,15 @@ def main() -> None:
     result = run_particle_ensemble(run_cfg, ens_cfg, sc_cfg, restart_state=restart_state)
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    # Extra 3D / mode-spectrum outputs (only present for self-consistent runs).
+    extra = {
+        key: val
+        for key, val in result.items()
+        if key.startswith(("mode_", "snap3d_", "last_")) or key == "nphi"
+    }
     np.savez(
         out_path,
+        **extra,
         t=result["t"],
         x=result["x"],
         v=result["v"],

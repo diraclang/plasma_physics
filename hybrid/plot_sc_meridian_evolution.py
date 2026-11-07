@@ -24,6 +24,22 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _meridian_x(r_grid: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Evenly spaced mirrored x axis, nearest r index per x, and mask of the empty inner gap.
+
+    For r_min = 0 this is the plain [-r_grid[:0:-1], r_grid] axis.  For an annulus
+    (r_min > 0) the axis is extended inward to x = 0 so it stays evenly spaced (needed by
+    streamplot); points with |x| < r_min are flagged in the returned gap mask.
+    """
+    dr = float(r_grid[1] - r_grid[0])
+    k = int(round(float(r_grid[0]) / dr)) if r_grid[0] > 0.0 else 0
+    r_ext = np.clip(r_grid[0] + dr * np.arange(-k, r_grid.size), 0.0, None)
+    x_grid = np.concatenate([-r_ext[:0:-1], r_ext])
+    ridx = np.abs(r_grid[None, :] - np.abs(x_grid)[:, None]).argmin(axis=1)
+    gap = np.abs(x_grid) < float(r_grid[0]) - 0.5 * dr
+    return x_grid, ridx, gap
+
+
 def _build_meridian_field(
     n_rz: np.ndarray,
     br: np.ndarray,
@@ -31,21 +47,18 @@ def _build_meridian_field(
     r_grid: np.ndarray,
     z_grid: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    x_grid = np.concatenate([-r_grid[:0:-1], r_grid])
-    nx = x_grid.size
-    nz = z_grid.size
+    x_grid, ridx, gap = _meridian_x(r_grid)
+    sign = np.where(x_grid < 0.0, -1.0, 1.0)
 
-    bx = np.zeros((nz, nx), dtype=float)
-    bz_plane = np.zeros((nz, nx), dtype=float)
-    n_plane = np.zeros((nz, nx), dtype=float)
-
-    for ix, x in enumerate(x_grid):
-        sign = -1.0 if x < 0.0 else 1.0
-        ridx = int(np.argmin(np.abs(r_grid - abs(x))))
-        bx[:, ix] = sign * br[ridx, :]
-        # In the meridian x-z plane, Bz keeps the same sign as cylindrical bz.
-        bz_plane[:, ix] = bz[ridx, :]
-        n_plane[:, ix] = n_rz[ridx, :]
+    bx = sign[None, :] * br[ridx, :].T
+    # In the meridian x-z plane, Bz keeps the same sign as cylindrical bz.
+    bz_plane = bz[ridx, :].T.copy()
+    n_plane = n_rz[ridx, :].T.copy()
+    if gap.any():
+        n_plane[:, gap] = 0.0
+        mask = np.broadcast_to(gap[None, :], bx.shape)
+        bx = np.ma.array(bx, mask=mask)
+        bz_plane = np.ma.array(bz_plane, mask=mask)
 
     xx, zz = np.meshgrid(x_grid, z_grid)
     return x_grid, z_grid, xx, zz, n_plane, bx, bz_plane
@@ -70,18 +83,18 @@ def _write_density_b_figure(
     bphi0 = np.where(rr < r0, args.toroidal_b * rr / r0, args.toroidal_b * r0 / np.maximum(rr, 1e-9))
     bphi0 = bphi0 * np.ones((1, z_grid.size))
 
+    x_grid, ridx_x, gap_x = _meridian_x(r_grid)
     planes = []
     for sid in ids:
         dbphi = snap_dbphi[sid] if snap_dbphi is not None else 0.0
         bmag_rz = np.sqrt(snap_br[sid] ** 2 + snap_bz[sid] ** 2 + (bphi0 + dbphi) ** 2)
-        bmag_plane = np.concatenate([bmag_rz[:0:-1, :], bmag_rz], axis=0).T
+        bmag_plane = bmag_rz[ridx_x, :].T
         planes.append(np.log10(np.maximum(bmag_plane, 1e-12)))
 
-    x_grid = np.concatenate([-r_grid[:0:-1], r_grid])
     xlim = args.r_max if args.r_max is not None else float(r_grid[-1])
     zlim = args.z_max if args.z_max is not None else float(z_grid[-1])
     xx, zz = np.meshgrid(x_grid, z_grid)
-    shown = (np.abs(xx) <= xlim) & (np.abs(zz) <= zlim)
+    shown = (np.abs(xx) <= xlim) & (np.abs(zz) <= zlim) & ~gap_x[None, :]
     allvals = np.concatenate([p[shown] for p in planes])
     bnorm = matplotlib.colors.Normalize(vmin=float(np.percentile(allvals, 2)), vmax=float(np.percentile(allvals, 98)))
 
