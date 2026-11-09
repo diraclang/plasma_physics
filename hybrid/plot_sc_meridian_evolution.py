@@ -145,7 +145,10 @@ def main() -> None:
     snap_n = snap_n[idx]
     snap_br = snap_br[idx]
     snap_bz = snap_bz[idx]
-    if "hist_step" in data.files and data["hist_step"].size == t.size:
+    if t.size == snap_n.shape[0]:
+        # A merged or reconstructed history may store one time value per saved snapshot.
+        t_snap = t.copy()
+    elif "hist_step" in data.files and data["hist_step"].size == t.size:
         # Particle histories were thinned: time is linear in the step number.
         t_snap = np.interp(snap_t_idx, np.asarray(data["hist_step"], dtype=float), t)
     else:
